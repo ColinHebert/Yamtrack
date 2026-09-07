@@ -179,6 +179,19 @@ function dateRangePicker() {
       const url = new URL(window.location.href);
       url.searchParams.set("start-date", this.startDate);
       url.searchParams.set("end-date", this.endDate);
+      // The chosen days start and end on this browser's clock, so say which.
+      // If the zone cannot be resolved the parameter is left off entirely, so
+      // the server applies its own documented fallback rather than us pinning
+      // a second copy of that default here.
+      let zone;
+      try {
+        zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch (error) {
+        console.warn("Could not resolve the browser timezone:", error);
+      }
+      if (zone) {
+        url.searchParams.set("tz", zone);
+      }
 
       // Navigate to the URL
       window.location.href = url.toString();

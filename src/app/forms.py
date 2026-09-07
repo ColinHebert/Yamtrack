@@ -1,7 +1,9 @@
+import datetime
 import math
 
 from django import forms
 from django.conf import settings
+from django.utils.html import format_html
 
 from app import config
 from app.models import (
@@ -19,6 +21,62 @@ from app.models import (
     Season,
     Sources,
 )
+
+
+class LocalDateTimeInput(forms.DateTimeInput):
+    """A ``datetime-local`` input that speaks UTC in both directions.
+
+    The element itself can only hold a naive wall clock, and which zone that
+    wall clock belongs to is the browser's business, not the server's. So the
+    server never writes a wall clock into it: it emits the UTC instant in
+    ``data-yt-value`` and ``localTime.js`` fills the visible field in the
+    browser's zone.
+
+    On the way back the same script resolves the field against the browser zone
+    and writes an ISO-8601 instant into the ``<name>_utc`` companion, which this
+    widget reads in preference to the naive value. Without JavaScript the
+    companion is empty and Django falls back to localizing the naive value with
+    ``TIME_ZONE``, which is the best the server can do unaided.
+    """
+
+    def __init__(self, attrs=None):
+        """Force the input type, which is what makes the JS pick the field up."""
+        super().__init__(attrs={"type": "datetime-local", **(attrs or {})})
+
+    def format_value(self, value):  # noqa: ARG002
+        """Render no wall clock: the browser fills the field from UTC."""
+        return ""
+
+    def render(self, name, value, attrs=None, renderer=None):
+        """Render the field, its UTC seed, and the companion JS writes into."""
+        instant = ""
+        if isinstance(value, datetime.datetime):
+            instant = value.astimezone(datetime.UTC).isoformat()
+
+        attrs = {**(attrs or {})}
+        if instant:
+            attrs["data-yt-value"] = instant
+
+        return format_html(
+            "{}{}",
+            super().render(name, value, attrs, renderer),
+            format_html('<input type="hidden" name="{}_utc">', name),
+        )
+
+    def value_from_datadict(self, data, files, name):
+        """Return the explicit UTC instant when the browser supplied one."""
+        return data.get(f"{name}_utc") or super().value_from_datadict(
+            data,
+            files,
+            name,
+        )
+
+
+def date_widget(attrs=None):
+    """Return the widget matching the TRACK_TIME setting."""
+    if settings.TRACK_TIME:
+        return LocalDateTimeInput(attrs=attrs)
+    return forms.DateInput(attrs={"type": "date", **(attrs or {})})
 
 
 def get_form_class(media_type):
@@ -222,12 +280,8 @@ class MediaForm(forms.ModelForm):
                 attrs={"min": 0, "max": 10, "step": 0.1, "placeholder": "0-10"},
             ),
             "progress": forms.NumberInput(attrs={"min": 0}),
-            "start_date": forms.DateTimeInput(attrs={"type": "datetime-local"})
-            if settings.TRACK_TIME
-            else forms.DateInput(attrs={"type": "date"}),
-            "end_date": forms.DateTimeInput(attrs={"type": "datetime-local"})
-            if settings.TRACK_TIME
-            else forms.DateInput(attrs={"type": "date"}),
+            "start_date": date_widget(),
+            "end_date": date_widget(),
             "notes": forms.Textarea(
                 attrs={"placeholder": "Add any notes or comments...", "rows": "5"},
             ),
@@ -373,11 +427,4 @@ class EpisodeForm(forms.ModelForm):
         """Initialize the form."""
         super().__init__(*args, **kwargs)
 
-        if settings.TRACK_TIME:
-            self.fields["end_date"].widget = forms.DateTimeInput(
-                attrs={"type": "datetime-local"},
-            )
-        else:
-            self.fields["end_date"].widget = forms.DateInput(
-                attrs={"type": "date"},
-            )
+        self.fields["end_date"].widget = date_widget()
