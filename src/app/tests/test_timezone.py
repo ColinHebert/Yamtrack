@@ -18,6 +18,7 @@ from app.models import TV, Episode, Item, MediaTypes, Movie, Season, Sources, St
 from app.providers import mal
 from app.templatetags import app_tags
 from events.models import Event
+from integrations.imports.imdb import IMDBImporter
 
 UserModel = get_user_model()
 
@@ -442,3 +443,42 @@ class ActivityRangeTests(TestCase):
             self.parse(**{"start-date": "2026-01-01", "end-date": "nonsense"}),
             (None, None),
         )
+
+
+class DateOnlyValueTests(TestCase):
+    """A date with no time must survive being rendered in any viewer's zone.
+
+    Import files carry days, not instants. Storing one as midnight in the
+    server's zone puts it on the previous day for every viewer west of the
+    server once the browser renders it, so it is anchored at noon UTC instead.
+    """
+
+    WESTERN = "America/Los_Angeles"
+
+    def parsed(self, importer_module, method, raw):
+        """Run one importer's date parser without touching the network."""
+        importer = importer_module.__new__(importer_module)
+        return getattr(importer, method)(raw)
+
+    @override_settings(TZ=PARIS, TIME_ZONE="Europe/Paris")
+    def test_import_date_survives_a_western_viewer(self):
+        """The day the file named is the day the viewer sees."""
+        stored = self.parsed(IMDBImporter, "_parse_date", "2024-01-05")
+
+        self.assertEqual(stored.astimezone(UTC).hour, 12)
+        self.assertEqual(
+            stored.astimezone(zoneinfo.ZoneInfo(self.WESTERN)).date(),
+            datetime.date(2024, 1, 5),
+        )
+
+    @override_settings(TZ=PARIS, TIME_ZONE="Europe/Paris")
+    def test_anchor_holds_across_the_usual_offsets(self):
+        """Noon UTC keeps the day for -12 through +11."""
+        stored = self.parsed(IMDBImporter, "_parse_date", "2024-01-05")
+
+        for name in ("Pacific/Honolulu", "America/New_York", "UTC", "Asia/Tokyo"):
+            with self.subTest(zone=name):
+                self.assertEqual(
+                    stored.astimezone(zoneinfo.ZoneInfo(name)).date(),
+                    datetime.date(2024, 1, 5),
+                )
