@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from app import statistics as stats
-from app.forms import EpisodeForm, MovieForm
+from app.forms import EpisodeForm, LocalDateInput, MovieForm
 from app.models import TV, Episode, Item, MediaTypes, Movie, Season, Sources, Status
 from app.providers import mal
 from app.templatetags import app_tags
@@ -482,3 +482,60 @@ class DateOnlyValueTests(TestCase):
                     stored.astimezone(zoneinfo.ZoneInfo(name)).date(),
                     datetime.date(2024, 1, 5),
                 )
+
+
+@override_settings(TZ=PARIS, TIME_ZONE="Europe/Paris", TRACK_TIME=False)
+class DateOnlyDeploymentTests(TestCase):
+    """With TRACK_TIME off, a picked day still has to survive any zone.
+
+    The widget submits a bare day, which Django would otherwise localize as
+    midnight in the server's zone -- putting it a day earlier for every viewer
+    west of the server once the browser renders the stored instant.
+    """
+
+    def test_widget_is_the_anchoring_one(self):
+        """The date input routes through the anchor, not a naive midnight."""
+        self.assertIsInstance(EpisodeForm().fields["end_date"].widget, LocalDateInput)
+
+    def test_picked_day_is_anchored(self):
+        """A submitted day becomes the instant that stands in for it."""
+        form = EpisodeForm({"end_date": "2024-01-05"})
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(
+            form.cleaned_data["end_date"],
+            datetime.datetime(2024, 1, 5, 12, tzinfo=UTC),
+        )
+
+    def test_picked_day_holds_across_zones(self):
+        """The day the user picked is the day every viewer sees."""
+        form = EpisodeForm({"end_date": "2024-01-05"})
+        form.is_valid()
+        stored = form.cleaned_data["end_date"]
+
+        for name in ("Pacific/Honolulu", "America/Los_Angeles", "UTC", "Asia/Tokyo"):
+            with self.subTest(zone=name):
+                self.assertEqual(
+                    stored.astimezone(zoneinfo.ZoneInfo(name)).date(),
+                    datetime.date(2024, 1, 5),
+                )
+
+    def test_editing_round_trips(self):
+        """Rendering a stored day back into the input returns the same day."""
+        episode = Episode(end_date=datetime.datetime(2024, 1, 5, 12, tzinfo=UTC))
+
+        rendered = EpisodeForm(instance=episode)["end_date"].value()
+        form = EpisodeForm({"end_date": rendered})
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(
+            form.cleaned_data["end_date"],
+            datetime.datetime(2024, 1, 5, 12, tzinfo=UTC),
+        )
+
+    def test_an_empty_day_stays_empty(self):
+        """Clearing the field must not invent an instant."""
+        form = EpisodeForm({"end_date": ""})
+
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertIsNone(form.cleaned_data["end_date"])

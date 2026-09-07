@@ -5,6 +5,7 @@ from django import forms
 from django.conf import settings
 from django.utils.html import format_html
 
+import app.helpers
 from app import config
 from app.models import (
     TV,
@@ -72,11 +73,42 @@ class LocalDateTimeInput(forms.DateTimeInput):
         )
 
 
+class LocalDateInput(forms.DateInput):
+    """A ``date`` input for deployments that do not track a time of day.
+
+    A picked day carries no instant, so it is anchored to one on the way in
+    rather than left as a naive midnight for Django to localize with
+    ``TIME_ZONE``: the browser renders the stored value, and a midnight in the
+    server's zone lands on the previous day for every viewer west of it.
+
+    Rendering is left to Django, which reads the instant back in the server's
+    zone -- the day that gives is right both for anchored values and for rows
+    written before they were anchored.
+    """
+
+    # Pinned rather than taken from DATE_INPUT_FORMATS, whose first entry
+    # varies with the active locale while the element only accepts ISO.
+    ISO_DATE = "%Y-%m-%d"
+
+    def __init__(self, attrs=None):
+        """Force the input type the browser needs."""
+        super().__init__(
+            attrs={"type": "date", **(attrs or {})},
+            format=self.ISO_DATE,
+        )
+
+    def value_from_datadict(self, data, files, name):
+        """Return the picked day as the instant that stands in for it."""
+        value = super().value_from_datadict(data, files, name)
+        instant = app.helpers.date_only_instant(value) if value else None
+        return instant.isoformat() if instant else value
+
+
 def date_widget(attrs=None):
     """Return the widget matching the TRACK_TIME setting."""
     if settings.TRACK_TIME:
         return LocalDateTimeInput(attrs=attrs)
-    return forms.DateInput(attrs={"type": "date", **(attrs or {})})
+    return LocalDateInput(attrs=attrs)
 
 
 def get_form_class(media_type):
@@ -280,12 +312,22 @@ class MediaForm(forms.ModelForm):
                 attrs={"min": 0, "max": 10, "step": 0.1, "placeholder": "0-10"},
             ),
             "progress": forms.NumberInput(attrs={"min": 0}),
-            "start_date": date_widget(),
-            "end_date": date_widget(),
             "notes": forms.Textarea(
                 attrs={"placeholder": "Add any notes or comments...", "rows": "5"},
             ),
         }
+
+    def __init__(self, *args, **kwargs):
+        """Initialize the form."""
+        super().__init__(*args, **kwargs)
+
+        # Chosen here rather than in Meta so the widget follows TRACK_TIME at
+        # the time the form is built. Selecting it in the class body freezes
+        # whatever the setting was when the module was first imported, which
+        # EpisodeForm already avoided.
+        for field in ("start_date", "end_date"):
+            if field in self.fields:
+                self.fields[field].widget = date_widget()
 
 
 class MangaForm(MediaForm):
