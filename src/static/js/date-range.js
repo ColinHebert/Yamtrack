@@ -72,7 +72,7 @@ function dateRangePicker() {
           end = new Date(start);
           break;
 
-        case "This Week":
+        case "This Week": {
           // Start from Monday of current week
           const dayOfWeek = today.getDay(); // 0 is Sunday, 1 is Monday, etc.
           const diff = dayOfWeek === 0 ? 6 : dayOfWeek - 1; // Adjust to make Monday the first day
@@ -80,6 +80,7 @@ function dateRangePicker() {
           start.setDate(start.getDate() - diff);
           end = new Date(today);
           break;
+        }
 
         case "Last 7 Days":
           start = new Date(today);
